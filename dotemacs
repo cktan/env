@@ -1,0 +1,77 @@
+(set-fringe-mode 10)  ; give some breathing room
+(setq visible-bell t) ; be quiet
+(global-hl-line-mode t)
+(set-face-foreground 'highlight "black")
+(set-face-background 'highlight "gray")
+
+(set-frame-font "Source Code Pro-14:weight=semilight")
+
+;; note: to access menu bar, use M-x menu-bar-open
+
+
+;; set up package sources
+(require 'package)
+(setq package-enable-at-startup nil)
+(add-to-list 'package-archives
+    '("melpa-stable" . "https://stable.melpa.org/packages/"))
+(add-to-list 'package-archives
+             '("melpa" . "https://melpa.org/packages/"))
+(package-initialize)
+
+;; Bootstrap `use-package'
+(unless (package-installed-p 'use-package)
+  (package-refresh-contents)
+  (package-install 'use-package))
+
+; Require editorconfig
+(use-package editorconfig
+   :ensure t
+  :config
+     (editorconfig-mode 1))
+
+(use-package markdown-mode
+  :ensure t
+  :mode ("README\\.md\\'" . gfm-mode)
+  :init (setq markdown-command "multimarkdown"))
+
+
+;(add-to-list 'load-path "~/.emacs.d/lisp")
+;(require 'editorconfig)
+;(editorconfig-mode 1)
+
+
+;; if there is an error in loading go-mode
+;; 1. M-x list-packages
+;; 2. find go-mode and select it
+;; 3. select install
+(require 'go-mode)
+
+; key short cut
+(global-set-key "\M-n" 'next-error)
+(global-set-key "\M-m" 'compile)
+(global-set-key "\M-s" 'tags-search)
+
+;; c++ namespace no indent
+(defun my-c-setup ()
+   (c-set-offset 'innamespace [0]))
+(add-hook 'c++-mode-hook 'my-c-setup)
+
+(custom-set-variables
+ ;; custom-set-variables was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(ansi-color-faces-vector
+   [default default default italic underline success warning error])
+ '(ansi-color-names-vector
+   ["black" "#d55e00" "#009e73" "#f8ec59" "#0072b2" "#cc79a7" "#56b4e9" "white"])
+ '(custom-enabled-themes '(tango-dark))
+ '(package-selected-packages '(2048-game use-package))
+ '(warning-suppress-log-types '((comp))))
+
+(custom-set-faces
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(default ((t (:family "Source Code Pro" :foundry "ADBO" :slant normal :weight normal :height 128 :width normal)))))

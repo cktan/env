@@ -1,0 +1,63 @@
+
+alias em='emacs -nw'
+alias e='emacs -nw'
+alias m='make -j8'
+alias ls='ls -F'
+alias rm~='rm *~'
+alias f='find . -name '
+alias python='python3'
+alias pspg='ps -ef | grep postgres'
+alias r='(cd ~/p/pg/ext && m && cd ~/p/pg && m install && cd run && bash restart.sh)'
+alias j='jobs'
+alias copy_stdin_to_clipboard='xclip -selection clipboard'
+export EDITOR=vi
+export TOOLCHAIN_DIR=~/p/toolchain
+
+
+# GOLANG
+# GOROOT is the location where Go package is installed on your system
+# GOPATH is the location of your work directory
+#export GOROOT=/usr/local/go
+export GOPATH=$HOME/go
+export PATH=$GOPATH/bin:$GOROOT/bin:$PATH
+export DEBUG=1
+
+
+SSH_ENV="$HOME/.ssh/agent-environment"
+
+
+function start_agent {
+    echo "Initialising new SSH agent..."
+    /usr/bin/ssh-agent | sed 's/^echo/#echo/' > "${SSH_ENV}"
+    echo succeeded
+    chmod 600 "${SSH_ENV}"
+    . "${SSH_ENV}" > /dev/null
+    /usr/bin/ssh-add;
+    [ -f ~/.ssh/google_compute_engine ] && /usr/bin/ssh-add ~/.ssh/google_compute_engine;
+}
+
+# Source SSH settings, if applicable
+
+if [ -f "${SSH_ENV}" ]; then
+    . "${SSH_ENV}" > /dev/null
+    #ps ${SSH_AGENT_PID} doesn't work under cywgin
+    ps --pid ${SSH_AGENT_PID} | grep ssh-agent$ > /dev/null || {
+        start_agent;
+    }
+else
+    start_agent;
+fi
+
+
+# set time
+#sudo date -s "$(wget -qSO- --max-redirect=0 google.com 2>&1 | grep Date: | cut -d' ' -f5-8)Z"
+
+export PS1='% '
+
+case "$TERM" in
+xterm*|rxvt*)
+    PS1="\[\033[1;32m\][\u]$PS1\[\033[0m\]"
+    ;;
+*)
+    ;;
+esac

@@ -1,0 +1,37 @@
+
+alias em='emacs -nw'
+alias e='emacs -nw'
+alias m='make -j8'
+alias ls='ls -F'
+alias rm~='rm *~'
+alias f='find . -name '
+alias python='python3'
+alias pspg='ps -ef | grep postgres'
+alias r='(cd ~/p/pg/ext && m && cd ~/p/pg && m install && cd run && bash restart.sh)'
+alias j='jobs'
+alias copy_stdin_to_clipboard='xclip -selection clipboard'
+export EDITOR=vi
+export TOOLCHAIN_DIR=~/p/toolchain
+
+
+# GOLANG
+# GOROOT is the location where Go package is installed on your system
+# GOPATH is the location of your work directory
+#export GOROOT=/usr/local/go
+export GOPATH=$HOME/go
+export PATH=$GOPATH/bin:$GOROOT/bin:$PATH
+export DEBUG=1
+
+
+# set time
+#sudo date -s "$(wget -qSO- --max-redirect=0 google.com 2>&1 | grep Date: | cut -d' ' -f5-8)Z"
+
+export PS1='% '
+
+case "$TERM" in
+xterm*|rxvt*)
+    PS1="\[\033[1;32m\][\u]$PS1\[\033[0m\]"
+    ;;
+*)
+    ;;
+esac

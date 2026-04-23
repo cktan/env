@@ -1,6 +1,6 @@
-sudo apt update -a
-sudo apt install emacs -a
-sudo apt install elixir -a
+sudo apt update -y
+sudo apt install -y emacs 
+sudo apt install -y elixir 
 
 
 cp dotemacs ~/.emacs

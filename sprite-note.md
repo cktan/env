@@ -11,6 +11,7 @@
 . em ~/.emacs   # ignore errors
 . M-x list-packages
 . select go-mode and install it
+. select elixir-mode and install it
 . C-x C-c
 
 . em 

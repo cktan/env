@@ -34,6 +34,9 @@
   :mode ("README\\.md\\'" . gfm-mode)
   :init (setq markdown-command "multimarkdown"))
 
+(use-package elixir-mode
+  :ensure t)
+
 
 ;(add-to-list 'load-path "~/.emacs.d/lisp")
 ;(require 'editorconfig)
@@ -44,7 +47,10 @@
 ;; 1. M-x list-packages
 ;; 2. find go-mode and select it
 ;; 3. select install
-(require 'go-mode)
+;;(require 'go-mode)
+(use-package go-mode
+  :ensure t)
+
 
 ; key short cut
 (global-set-key "\M-n" 'next-error)
@@ -64,9 +70,10 @@
  '(ansi-color-faces-vector
    [default default default italic underline success warning error])
  '(ansi-color-names-vector
-   ["black" "#d55e00" "#009e73" "#f8ec59" "#0072b2" "#cc79a7" "#56b4e9" "white"])
+   ["black" "#d55e00" "#009e73" "#f8ec59" "#0072b2" "#cc79a7" "#56b4e9"
+    "white"])
  '(custom-enabled-themes '(tango-dark))
- '(package-selected-packages '(2048-game use-package))
+ '(package-selected-packages nil)
  '(warning-suppress-log-types '((comp))))
 
 (custom-set-faces

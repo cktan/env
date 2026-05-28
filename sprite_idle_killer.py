@@ -1,21 +1,23 @@
-#!/bin/python3
+#!/usr/bin/env python3
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
 
-LOG_PATH = str(Path("~/.local/share/idle_killer.log").expanduser())
+LOG_PATH = "/tmp/sprite-idle-killer.log"
 LOG_MAX_LINES = 500
-CPU_THRESHOLD = 5.0
-SLEEP_INTERVAL = 300
+LOAD_THRESHOLD = 0.1   # 1-min load avg considered active
+POLL_INTERVAL = 60     # seconds between load samples
+IDLE_CHECK_EVERY = 5   # run full idle check every N polls
 SIGTERM_WAIT = 5
+BASH_RECENT_SECS = 3600
 
 
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     path = Path(LOG_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
         f.write(f"{ts} {msg}\n")
     lines = path.read_text().splitlines(keepends=True)
@@ -50,76 +52,86 @@ def kill_existing_instances():
     return killed
 
 
-def cpu_usage():
-    def read():
-        with open("/proc/stat") as f:
-            parts = f.readline().split()
-        vals = [int(x) for x in parts[1:]]
-        return sum(vals), vals[3]
-
-    t1, i1 = read()
-    time.sleep(1)
-    t2, i2 = read()
-    delta = t2 - t1
-    return 0.0 if delta == 0 else (1 - (i2 - i1) / delta) * 100
+def load_avg():
+    """Return the 1-minute load average."""
+    return float(open("/proc/loadavg").read().split()[0])
 
 
-def active_connections():
-    """Return True if any PID >= 10 (other than self) has an established TCP connection."""
-    established_inodes = set()
-    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
-        try:
-            with open(path) as f:
-                for line in f.readlines()[1:]:
-                    parts = line.split()
-                    if len(parts) > 9 and parts[3] == "01":
-                        established_inodes.add(parts[9])
-        except FileNotFoundError:
-            pass
+def recent_bash_process():
+    """Return (pid, age_secs) of the youngest bash started < 1hr ago, or None."""
+    clk_tck = os.sysconf("SC_CLK_TCK")
+    boot_time = None
+    with open("/proc/stat") as f:
+        for line in f:
+            if line.startswith("btime"):
+                boot_time = int(line.split()[1])
+                break
+    if boot_time is None:
+        return None
 
-    if not established_inodes:
-        return False
-
+    now = time.time()
     my_pid = os.getpid()
+    youngest = None
+
     for entry in os.scandir("/proc"):
         if not entry.name.isdigit():
             continue
         pid = int(entry.name)
-        if pid < 10 or pid == my_pid:
+        if pid == my_pid:
             continue
         try:
-            for fd in os.scandir(f"/proc/{pid}/fd"):
-                try:
-                    target = os.readlink(fd.path)
-                    if target.startswith("socket:[") and target[8:-1] in established_inodes:
-                        return True
-                except (FileNotFoundError, PermissionError):
-                    pass
-        except (FileNotFoundError, PermissionError):
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            if comm != "bash":
+                continue
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            # starttime is field 22; strip "(comm) " to get remaining fields
+            after_comm = stat[stat.rfind(")") + 2:]
+            fields = after_comm.split()
+            start_ticks = int(fields[19])  # field 22 overall = index 19 after state
+            age = now - (boot_time + start_ticks / clk_tck)
+            if age < BASH_RECENT_SECS:
+                if youngest is None or age < youngest[1]:
+                    youngest = (pid, age)
+        except (FileNotFoundError, PermissionError, ValueError, IndexError):
             pass
-    return False
+
+    return youngest
 
 
-def killable_pids():
-    my_pid = os.getpid()
-    pids = []
-    for entry in os.scandir("/proc"):
-        if entry.name.isdigit():
-            pid = int(entry.name)
-            if pid >= 10 and pid != my_pid:
-                pids.append(pid)
-    return pids
+def stop_services():
+    try:
+        result = subprocess.run(
+            ["systemctl", "list-units", "--type=service", "--state=running",
+             "--no-legend", "--no-pager"],
+            capture_output=True, text=True,
+        )
+        services = [line.split()[0] for line in result.stdout.splitlines() if line.strip()]
+        for svc in services:
+            subprocess.run(["systemctl", "stop", svc], capture_output=True, timeout=10)
+        return services
+    except Exception as e:
+        log(f"stop_services error: {e}")
+        return []
 
 
 def kill_processes():
-    targets = killable_pids()
+    my_pid = os.getpid()
+
+    def killable():
+        return [
+            int(e.name)
+            for e in os.scandir("/proc")
+            if e.name.isdigit() and int(e.name) >= 10 and int(e.name) != my_pid
+        ]
+
+    targets = killable()
     for pid in targets:
         try:
             os.kill(pid, signal.SIGTERM)
         except (ProcessLookupError, PermissionError):
             pass
     time.sleep(SIGTERM_WAIT)
-    for pid in killable_pids():
+    for pid in killable():
         try:
             os.kill(pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
@@ -127,48 +139,89 @@ def kill_processes():
     return len(targets)
 
 
+def survivors():
+    my_pid = os.getpid()
+    return [
+        int(e.name)
+        for e in os.scandir("/proc")
+        if e.name.isdigit() and int(e.name) >= 10 and int(e.name) != my_pid
+    ]
+
+
 def main_loop():
     log("started")
+    load_history = []  # list of (timestamp, load_avg_1min)
+    poll = 0
     while True:
-        try:
-            if Path("/tmp/sprite-idle-killer-skip").exists():
-                log("skip file present, sleeping")
-                time.sleep(SLEEP_INTERVAL)
-                continue
-            cpu = cpu_usage()
-            net = active_connections()
-            if cpu > CPU_THRESHOLD or net:
-                log(f"active (CPU {cpu:.1f}%, net={net}), sleeping")
+        now = time.time()
+        load = load_avg()
+        load_history.append((now, load))
+        load_history = [(t, v) for t, v in load_history if now - t < 3600]
+        poll += 1
+
+        if poll % IDLE_CHECK_EVERY != 0:
+            time.sleep(POLL_INTERVAL)
+            continue
+
+        active_reasons = []
+
+        if Path("/tmp/sprite-idle-killer-skip").exists():
+            active_reasons.append("skip file present")
+
+        if load >= LOAD_THRESHOLD:
+            active_reasons.append(f"load {load:.2f} >= {LOAD_THRESHOLD}")
+        else:
+            log(f"idle check: load {load:.2f} < {LOAD_THRESHOLD}")
+            spike = next(((t, v) for t, v in load_history if v >= LOAD_THRESHOLD), None)
+            if spike:
+                spike_age = now - spike[0]
+                active_reasons.append(f"load was {spike[1]:.2f} {spike_age:.0f}s ago (< 1hr)")
             else:
-                log(f"idle (CPU {cpu:.1f}%, net={net}) — acting")
-                n = kill_processes()
-                log(f"killed {n} processes")
-        except Exception as e:
-            log(f"error: {e}")
-        time.sleep(SLEEP_INTERVAL)
+                log(f"idle check: no load spike >= {LOAD_THRESHOLD} in past hour ({len(load_history)} samples)")
+
+        bash = recent_bash_process()
+        if bash:
+            pid, age = bash
+            active_reasons.append(f"bash pid {pid} started {age:.0f}s ago (< {BASH_RECENT_SECS}s)")
+        else:
+            log("idle check: no recent bash process")
+
+        if active_reasons:
+            log(f"not idle: {'; '.join(active_reasons)}")
+            time.sleep(POLL_INTERVAL)
+            continue
+
+        log("system is idle — going down")
+        services = stop_services()
+        if services:
+            log(f"stopped services: {', '.join(services)}")
+        n = kill_processes()
+        log(f"killed {n} processes")
+        still_running = survivors()
+        if still_running:
+            log(f"WARNING: survivors after kill: {still_running}")
+        else:
+            log("verified: no survivors")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
     if "-h" in sys.argv or "--help" in sys.argv:
         print("""sprite_idle_killer.py — kills idle processes on this Sprite machine
 
-Runs every 5 minutes in the background (started from ~/.profile).
-On startup, any previous instance is killed before the new one takes over.
+Samples 1-min load average every 60s. Full idle check every 5 samples.
+On startup, kills any previous instance.
 
-ACTIVITY DETECTION (any of these = active, skip kill):
-  - CPU usage > 5%
-  - Any process has an established network connection
+IDLE when ALL of the following are true:
+  - No skip file at /tmp/sprite-idle-killer-skip
+  - Current 1-min load avg < 0.1
+  - No load spike >= 0.1 in the past hour
+  - No bash process started less than 1 hour ago
 
-If idle, kills all PIDs >= 10 except itself.
+If not idle: wait for next check cycle.
+If idle: stop services, kill all PIDs >= 10 (except self), verify, exit 0.
 
-SKIP FILE:
-  touch /tmp/sprite-idle-killer-skip   suspend killing indefinitely
-  rm /tmp/sprite-idle-killer-skip      resume normal operation
-  (file is in /tmp so it clears on reboot)
-
-LOG: ~/.local/share/idle_killer.log
-
-See also: INVESTIGATE.md in ~/p/env/ for idle detection rationale.""")
+LOG: /tmp/sprite-idle-killer.log""")
         sys.exit(0)
 
     killed = kill_existing_instances()

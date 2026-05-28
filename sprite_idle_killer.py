@@ -17,6 +17,7 @@ VERBOSE = False
 
 
 def log(msg):
+    """Append a timestamped line to LOG_PATH, trimming the file to LOG_MAX_LINES."""
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     path = Path(LOG_PATH)
     with open(path, "a") as f:
@@ -27,11 +28,13 @@ def log(msg):
 
 
 def vlog(msg):
+    """Log only when -v is active; prefixes line with [v]."""
     if VERBOSE:
         log(f"[v] {msg}")
 
 
 def kill_existing_instances():
+    """Kill any other running process whose cmdline contains this script's filename."""
     my_pid = os.getpid()
     script_name = Path(__file__).name
     killed = []
@@ -65,7 +68,7 @@ def load_avgs():
 
 
 def recent_bash_process():
-    """Return (pid, age_secs) of the youngest bash started < 1hr ago, or None."""
+    """Return (pid, age_secs) of the most recently started bash within BASH_RECENT_SECS, or None."""
     clk_tck = os.sysconf("SC_CLK_TCK")
     boot_time = None
     with open("/proc/stat") as f:
@@ -109,6 +112,7 @@ def recent_bash_process():
 
 
 def stop_services():
+    """Stop all running systemd services; return list of service names stopped."""
     try:
         result = subprocess.run(
             ["systemctl", "list-units", "--type=service", "--state=running",
@@ -125,6 +129,7 @@ def stop_services():
 
 
 def kill_processes():
+    """SIGTERM then SIGKILL all PIDs >= 10 except self; return count of initial targets."""
     my_pid = os.getpid()
 
     def killable():
@@ -150,6 +155,7 @@ def kill_processes():
 
 
 def survivors():
+    """Return list of (pid, cmd) for all PIDs >= 10 still alive except self."""
     my_pid = os.getpid()
     result = []
     for e in os.scandir("/proc"):
@@ -167,6 +173,7 @@ def survivors():
 
 
 def main_loop():
+    """Check idleness every SLEEP_INTERVAL seconds; kill everything and exit when idle."""
     log("--- start" + (" (-v)" if VERBOSE else "") + " ---")
     log("started in -v mode" if VERBOSE else "started")
     while True:

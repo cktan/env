@@ -11,7 +11,7 @@ LOG_MAX_LINES = 500
 LOAD_THRESHOLD = 0.1   # all three load averages must be <= this to be idle
 SLEEP_INTERVAL = 300   # seconds between idle checks
 SIGTERM_WAIT = 5
-BASH_RECENT_SECS = 3600
+BASH_RECENT_SECS = 1800
 
 VERBOSE = False
 
@@ -210,7 +210,7 @@ Checks every 5 minutes. On startup, kills any previous instance.
 IDLE when ALL of the following are true:
   - No skip file at /tmp/sprite-idle-killer-skip
   - All three load averages (1m, 5m, 15m) <= 0.1
-  - No bash process started less than 1 hour ago
+  - No bash process started less than 30 minutes ago
 
 If not idle: wait for next check cycle.
 If idle: stop services, kill all PIDs >= 10 (except self), verify, exit 0.

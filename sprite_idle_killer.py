@@ -151,11 +151,19 @@ def kill_processes():
 
 def survivors():
     my_pid = os.getpid()
-    return [
-        int(e.name)
-        for e in os.scandir("/proc")
-        if e.name.isdigit() and int(e.name) >= 10 and int(e.name) != my_pid
-    ]
+    result = []
+    for e in os.scandir("/proc"):
+        if not e.name.isdigit():
+            continue
+        pid = int(e.name)
+        if pid < 10 or pid == my_pid:
+            continue
+        try:
+            cmd = Path(f"/proc/{pid}/comm").read_text().strip()
+        except (FileNotFoundError, PermissionError):
+            cmd = "?"
+        result.append((pid, cmd))
+    return result
 
 
 def main_loop():
@@ -184,25 +192,26 @@ def main_loop():
             log("idle check: no recent bash process")
 
         if active_reasons:
-            log(f"not idle: {'; '.join(active_reasons)}")
+            log(f" - not idle: {'; '.join(active_reasons)}; sleep")
             time.sleep(SLEEP_INTERVAL)
             continue
 
-        log("system is idle — going down")
+        log("system is idle — going down -----------------------")
         ps = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
         for line in ps.stdout.splitlines():
-            log(f"  {line}")
+            log(f" -  {line}")
         services = stop_services()
         if services:
-            log(f"stopped services: {', '.join(services)}")
+            log(f" - stopped services: {', '.join(services)}")
         n = kill_processes()
-        log(f"killed {n} processes")
+        log(f" - killed {n} processes")
         still_running = survivors()
         if still_running:
-            log(f"WARNING: survivors after kill: {still_running}")
+            log(f"WARNING: survivors after kill: {', '.join(f'{pid}({cmd})' for pid, cmd in still_running)}")
         else:
             log("verified: no survivors")
         log("--- exit ---")
+        log("===================================================")
         sys.exit(0)
 
 

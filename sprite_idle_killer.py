@@ -14,6 +14,8 @@ IDLE_CHECK_EVERY = 5   # run full idle check every N polls
 SIGTERM_WAIT = 5
 BASH_RECENT_SECS = 3600
 
+VERBOSE = False
+
 
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -23,6 +25,11 @@ def log(msg):
     lines = path.read_text().splitlines(keepends=True)
     if len(lines) > LOG_MAX_LINES:
         path.write_text("".join(lines[-LOG_MAX_LINES:]))
+
+
+def vlog(msg):
+    if VERBOSE:
+        log(f"[v] {msg}")
 
 
 def kill_existing_instances():
@@ -90,8 +97,11 @@ def recent_bash_process():
             start_ticks = int(fields[19])  # field 22 overall = index 19 after state
             age = now - (boot_time + start_ticks / clk_tck)
             if age < BASH_RECENT_SECS:
+                vlog(f"bash pid {pid} age {age:.0f}s — recent")
                 if youngest is None or age < youngest[1]:
                     youngest = (pid, age)
+            else:
+                vlog(f"bash pid {pid} age {age:.0f}s — old, ignoring")
         except (FileNotFoundError, PermissionError, ValueError, IndexError):
             pass
 
@@ -149,7 +159,7 @@ def survivors():
 
 
 def main_loop():
-    log("started")
+    log("started in -v mode" if VERBOSE else "started")
     load_history = []  # list of (timestamp, load_avg_1min)
     poll = 0
     while True:
@@ -159,6 +169,8 @@ def main_loop():
         load_history = [(t, v) for t, v in load_history if now - t < 3600]
         poll += 1
 
+        vlog(f"poll {poll}: load {load:.2f} ({len(load_history)} samples in history)")
+
         if poll % IDLE_CHECK_EVERY != 0:
             time.sleep(POLL_INTERVAL)
             continue
@@ -166,6 +178,7 @@ def main_loop():
         active_reasons = []
 
         if Path("/tmp/sprite-idle-killer-skip").exists():
+            log("skip file present — skipping idle check")
             active_reasons.append("skip file present")
 
         if load >= LOAD_THRESHOLD:
@@ -223,6 +236,9 @@ If idle: stop services, kill all PIDs >= 10 (except self), verify, exit 0.
 
 LOG: /tmp/sprite-idle-killer.log""")
         sys.exit(0)
+
+    if "-v" in sys.argv or "--verbose" in sys.argv:
+        VERBOSE = True
 
     killed = kill_existing_instances()
     if killed:

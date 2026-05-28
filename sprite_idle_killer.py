@@ -8,9 +8,8 @@ from pathlib import Path
 
 LOG_PATH = "/tmp/sprite-idle-killer.log"
 LOG_MAX_LINES = 500
-LOAD_THRESHOLD = 0.1   # 1-min load avg considered active
-POLL_INTERVAL = 60     # seconds between load samples
-IDLE_CHECK_EVERY = 5   # run full idle check every N polls
+LOAD_THRESHOLD = 0.1   # all three load averages must be <= this to be idle
+SLEEP_INTERVAL = 300   # seconds between idle checks
 SIGTERM_WAIT = 5
 BASH_RECENT_SECS = 3600
 
@@ -59,9 +58,10 @@ def kill_existing_instances():
     return killed
 
 
-def load_avg():
-    """Return the 1-minute load average."""
-    return float(open("/proc/loadavg").read().split()[0])
+def load_avgs():
+    """Return (1-min, 5-min, 15-min) load averages."""
+    parts = open("/proc/loadavg").read().split()
+    return float(parts[0]), float(parts[1]), float(parts[2])
 
 
 def recent_bash_process():
@@ -160,37 +160,20 @@ def survivors():
 
 def main_loop():
     log("started in -v mode" if VERBOSE else "started")
-    load_history = []  # list of (timestamp, load_avg_1min)
-    poll = 0
     while True:
-        now = time.time()
-        load = load_avg()
-        load_history.append((now, load))
-        load_history = [(t, v) for t, v in load_history if now - t < 3600]
-        poll += 1
-
-        vlog(f"poll {poll}: load {load:.2f} ({len(load_history)} samples in history)")
-
-        if poll % IDLE_CHECK_EVERY != 0:
-            time.sleep(POLL_INTERVAL)
-            continue
-
         active_reasons = []
 
         if Path("/tmp/sprite-idle-killer-skip").exists():
             log("skip file present — skipping idle check")
             active_reasons.append("skip file present")
 
-        if load >= LOAD_THRESHOLD:
-            active_reasons.append(f"load {load:.2f} >= {LOAD_THRESHOLD}")
-        else:
-            log(f"idle check: load {load:.2f} < {LOAD_THRESHOLD}")
-            spike = next(((t, v) for t, v in load_history if v >= LOAD_THRESHOLD), None)
-            if spike:
-                spike_age = now - spike[0]
-                active_reasons.append(f"load was {spike[1]:.2f} {spike_age:.0f}s ago (< 1hr)")
-            else:
-                log(f"idle check: no load spike >= {LOAD_THRESHOLD} in past hour ({len(load_history)} samples)")
+        l1, l5, l15 = load_avgs()
+        vlog(f"load averages: {l1:.2f} {l5:.2f} {l15:.2f}")
+        for label, val in (("1m", l1), ("5m", l5), ("15m", l15)):
+            if val > LOAD_THRESHOLD:
+                active_reasons.append(f"load({label}) {val:.2f} > {LOAD_THRESHOLD}")
+        if not any(v > LOAD_THRESHOLD for v in (l1, l5, l15)):
+            log(f"idle check: load {l1:.2f} {l5:.2f} {l15:.2f} all <= {LOAD_THRESHOLD}")
 
         bash = recent_bash_process()
         if bash:
@@ -201,7 +184,7 @@ def main_loop():
 
         if active_reasons:
             log(f"not idle: {'; '.join(active_reasons)}")
-            time.sleep(POLL_INTERVAL)
+            time.sleep(SLEEP_INTERVAL)
             continue
 
         log("system is idle — going down")
@@ -222,13 +205,11 @@ if __name__ == "__main__":
     if "-h" in sys.argv or "--help" in sys.argv:
         print("""sprite_idle_killer.py — kills idle processes on this Sprite machine
 
-Samples 1-min load average every 60s. Full idle check every 5 samples.
-On startup, kills any previous instance.
+Checks every 5 minutes. On startup, kills any previous instance.
 
 IDLE when ALL of the following are true:
   - No skip file at /tmp/sprite-idle-killer-skip
-  - Current 1-min load avg < 0.1
-  - No load spike >= 0.1 in the past hour
+  - All three load averages (1m, 5m, 15m) <= 0.1
   - No bash process started less than 1 hour ago
 
 If not idle: wait for next check cycle.

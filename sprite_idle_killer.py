@@ -1,14 +1,10 @@
 #!/bin/python3
-import json
 import os
 import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
 
-SERVICE_NAME = "sprite-idle-killer"
-SCRIPT_PATH = str(Path("~/.local/bin/sprite_idle_killer.py").expanduser())
 LOG_PATH = str(Path("~/.local/share/idle_killer.log").expanduser())
 LOG_MAX_LINES = 500
 CPU_THRESHOLD = 5.0
@@ -18,14 +14,40 @@ SIGTERM_WAIT = 5
 
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"{ts} {msg}\n"
     path = Path(LOG_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
-        f.write(entry)
+        f.write(f"{ts} {msg}\n")
     lines = path.read_text().splitlines(keepends=True)
     if len(lines) > LOG_MAX_LINES:
         path.write_text("".join(lines[-LOG_MAX_LINES:]))
+
+
+def kill_existing_instances():
+    my_pid = os.getpid()
+    script_name = Path(__file__).name
+    killed = []
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == my_pid:
+            continue
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
+            if script_name in cmdline:
+                os.kill(pid, signal.SIGTERM)
+                killed.append(pid)
+        except (FileNotFoundError, PermissionError):
+            pass
+    if killed:
+        time.sleep(2)
+        for pid in killed:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+    return killed
 
 
 def cpu_usage():
@@ -33,7 +55,7 @@ def cpu_usage():
         with open("/proc/stat") as f:
             parts = f.readline().split()
         vals = [int(x) for x in parts[1:]]
-        return sum(vals), vals[3]  # total, idle
+        return sum(vals), vals[3]
 
     t1, i1 = read()
     time.sleep(1)
@@ -43,8 +65,7 @@ def cpu_usage():
 
 
 def active_connections():
-    """Return True if any PID >= 10 has an established network connection."""
-    # Collect socket inodes for ESTABLISHED connections (state 01) from tcp/tcp6
+    """Return True if any PID >= 10 (other than self) has an established TCP connection."""
     established_inodes = set()
     for path in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
@@ -77,41 +98,6 @@ def active_connections():
         except (FileNotFoundError, PermissionError):
             pass
     return False
-
-
-def list_services():
-    r = subprocess.run(["sprite-env", "services", "list"], capture_output=True, text=True)
-    try:
-        return json.loads(r.stdout)
-    except Exception:
-        return []
-
-
-def is_registered():
-    for svc in list_services():
-        name = svc.get("name") if isinstance(svc, dict) else svc
-        if name == SERVICE_NAME:
-            return True
-    return False
-
-
-def register():
-    subprocess.run([
-        "sprite-env", "services", "create", SERVICE_NAME,
-        "--cmd", "/bin/python3",
-        "--args", SCRIPT_PATH,
-        "--no-stream",
-    ], check=True)
-
-
-def stop_services():
-    stopped = []
-    for svc in list_services():
-        name = svc.get("name") if isinstance(svc, dict) else svc
-        if name and name != SERVICE_NAME:
-            subprocess.run(["sprite-env", "services", "stop", name], capture_output=True)
-            stopped.append(name)
-    return stopped
 
 
 def killable_pids():
@@ -155,9 +141,6 @@ def main_loop():
                 log(f"active (CPU {cpu:.1f}%, net={net}), sleeping")
             else:
                 log(f"idle (CPU {cpu:.1f}%, net={net}) — acting")
-                stopped = stop_services()
-                if stopped:
-                    log(f"stopped services: {', '.join(stopped)}")
                 n = kill_processes()
                 log(f"killed {n} processes")
         except Exception as e:
@@ -169,12 +152,14 @@ if __name__ == "__main__":
     if "-h" in sys.argv or "--help" in sys.argv:
         print("""sprite_idle_killer.py — kills idle processes on this Sprite machine
 
-Runs every 5 minutes as a sprite-env service. On each cycle, if the machine
-is idle it stops all sprite-env services, then kills all PIDs >= 10.
+Runs every 5 minutes in the background (started from ~/.profile).
+On startup, any previous instance is killed before the new one takes over.
 
 ACTIVITY DETECTION (any of these = active, skip kill):
   - CPU usage > 5%
   - Any process has an established network connection
+
+If idle, kills all PIDs >= 10 except itself.
 
 SKIP FILE:
   touch /tmp/sprite-idle-killer-skip   suspend killing indefinitely
@@ -183,15 +168,10 @@ SKIP FILE:
 
 LOG: ~/.local/share/idle_killer.log
 
-FIRST RUN:
-  python3 ~/.local/bin/sprite_idle_killer.py
-  Registers itself as the 'sprite-idle-killer' service and exits.
-  Subsequent runs (via the service) enter the monitoring loop.""")
+See also: INVESTIGATE.md in ~/p/env/ for idle detection rationale.""")
         sys.exit(0)
 
-    if not is_registered():
-        log("first run — registering service")
-        register()
-        log("registered, exiting (service takes over)")
-        sys.exit(0)
+    killed = kill_existing_instances()
+    if killed:
+        log(f"killed previous instance(s): {killed}")
     main_loop()

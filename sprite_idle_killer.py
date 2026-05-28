@@ -159,6 +159,7 @@ def survivors():
 
 
 def main_loop():
+    log("--- start" + (" (-v)" if VERBOSE else "") + " ---")
     log("started in -v mode" if VERBOSE else "started")
     while True:
         active_reasons = []
@@ -188,6 +189,9 @@ def main_loop():
             continue
 
         log("system is idle — going down")
+        ps = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
+        for line in ps.stdout.splitlines():
+            log(f"  {line}")
         services = stop_services()
         if services:
             log(f"stopped services: {', '.join(services)}")
@@ -198,6 +202,7 @@ def main_loop():
             log(f"WARNING: survivors after kill: {still_running}")
         else:
             log("verified: no survivors")
+        log("--- exit ---")
         sys.exit(0)
 
 

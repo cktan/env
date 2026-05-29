@@ -8,7 +8,7 @@ from pathlib import Path
 
 LOG_PATH = "/tmp/sprite-idle-killer.log"
 LOG_MAX_LINES = 500
-LOAD_THRESHOLD = 0.1   # all three load averages must be <= this to be idle
+LOAD_THRESHOLD = 0.05   # all three load averages must be <= this to be idle
 SLEEP_INTERVAL = 300   # seconds between idle checks
 SIGTERM_WAIT = 5
 BASH_RECENT_SECS = 1800
@@ -230,7 +230,7 @@ Checks every 5 minutes. On startup, kills any previous instance.
 
 IDLE when ALL of the following are true:
   - No skip file at /tmp/sprite-idle-killer-skip
-  - All three load averages (1m, 5m, 15m) <= 0.1
+  - All three load averages (1m, 5m, 15m) <= 0.05
   - No bash process started less than 30 minutes ago
 
 If not idle: wait for next check cycle.

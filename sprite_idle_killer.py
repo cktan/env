@@ -8,7 +8,7 @@ from pathlib import Path
 
 LOG_PATH = "/tmp/sprite-idle-killer.log"
 LOG_MAX_LINES = 500
-LOAD_THRESHOLD = 0.05   # all three load averages must be <= this to be idle
+LOAD_THRESHOLD = 0.03   # all three load averages must be <= this to be idle
 SLEEP_INTERVAL = 300   # seconds between idle checks
 SIGTERM_WAIT = 5
 BASH_RECENT_SECS = 1800

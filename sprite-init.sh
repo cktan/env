@@ -12,3 +12,6 @@ git config user.name "CK Tan" && git config user.email "cktanx@gmail.com"
 git config pull.rebase true
 
 cp sprite_idle_killer.py ~/
+
+mkdir -p  ~/.claude/skills/serve-tmp
+cp skills/serve-tmp.md ~/.claude/skills/serve-tmp/

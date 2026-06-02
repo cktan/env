@@ -15,3 +15,6 @@ cp sprite_idle_killer.py ~/
 
 mkdir -p  ~/.claude/skills/serve-tmp
 cp skills/serve-tmp.md ~/.claude/skills/serve-tmp/
+
+# install code graph
+npm i -g @colbymchenry/codegraph

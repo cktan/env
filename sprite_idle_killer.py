@@ -128,8 +128,16 @@ def stop_services():
         return []
 
 
+def is_tmux(pid):
+    """Return True if pid's comm starts with 'tmux'."""
+    try:
+        return Path(f"/proc/{pid}/comm").read_text().strip().startswith("tmux")
+    except (FileNotFoundError, PermissionError):
+        return False
+
+
 def kill_processes():
-    """SIGTERM then SIGKILL all PIDs >= 10 except self; return count of initial targets."""
+    """SIGTERM then SIGKILL all PIDs >= 10 except self and tmux; return count of initial targets."""
     my_pid = os.getpid()
 
     def killable():
@@ -137,6 +145,7 @@ def kill_processes():
             int(e.name)
             for e in os.scandir("/proc")
             if e.name.isdigit() and int(e.name) >= 10 and int(e.name) != my_pid
+            and not is_tmux(int(e.name))
         ]
 
     targets = killable()
@@ -155,7 +164,7 @@ def kill_processes():
 
 
 def survivors():
-    """Return list of (pid, cmd) for all PIDs >= 10 still alive except self."""
+    """Return list of (pid, cmd) for all PIDs >= 10 still alive except self and tmux."""
     my_pid = os.getpid()
     result = []
     for e in os.scandir("/proc"):
@@ -168,6 +177,8 @@ def survivors():
             cmd = Path(f"/proc/{pid}/comm").read_text().strip()
         except (FileNotFoundError, PermissionError):
             cmd = "?"
+        if cmd.startswith("tmux"):
+            continue
         result.append((pid, cmd))
     return result
 

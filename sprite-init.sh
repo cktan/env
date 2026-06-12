@@ -1,8 +1,8 @@
 sudo apt update -y
 sudo apt install -y emacs 
 sudo apt install -y elixir 
-sudo apt install -y dc xxd cal
-
+sudo apt install -y dc xxd
+sudo apt install universal-ctags
 
 cp dotemacs ~/.emacs
 cp sprite-dotmybashrc ~/.mybashrc

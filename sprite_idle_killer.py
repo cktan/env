@@ -12,6 +12,7 @@ LOAD_THRESHOLD = 0.03   # all three load averages must be <= this to be idle
 SLEEP_INTERVAL = 300   # seconds between idle checks
 SIGTERM_WAIT = 5
 BASH_RECENT_SECS = 1800
+BASH_OLD_SECS = 36000  # 10 hours
 
 VERBOSE = False
 
@@ -111,6 +112,44 @@ def recent_bash_process():
     return youngest
 
 
+def old_bash_process():
+    """Return (pid, age_secs) of any bash process older than BASH_OLD_SECS, or None."""
+    clk_tck = os.sysconf("SC_CLK_TCK")
+    boot_time = None
+    with open("/proc/stat") as f:
+        for line in f:
+            if line.startswith("btime"):
+                boot_time = int(line.split()[1])
+                break
+    if boot_time is None:
+        return None
+
+    now = time.time()
+    my_pid = os.getpid()
+
+    for entry in os.scandir("/proc"):
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == my_pid:
+            continue
+        try:
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            if comm != "bash":
+                continue
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            after_comm = stat[stat.rfind(")") + 2:]
+            fields = after_comm.split()
+            start_ticks = int(fields[19])
+            age = now - (boot_time + start_ticks / clk_tck)
+            if age >= BASH_OLD_SECS:
+                return (pid, age)
+        except (FileNotFoundError, PermissionError, ValueError, IndexError):
+            pass
+
+    return None
+
+
 def stop_services():
     """Stop all running systemd services; return list of service names stopped."""
     try:
@@ -188,6 +227,27 @@ def main_loop():
     log("--- start" + (" (-v)" if VERBOSE else "") + " ---")
     log("started in -v mode" if VERBOSE else "started")
     while True:
+        old_bash = old_bash_process()
+        if old_bash:
+            pid, age = old_bash
+            log(f"bash pid {pid} has been running {age/3600:.1f}h (>= {BASH_OLD_SECS/3600:.0f}h) — going down -----------------------")
+            ps = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
+            for line in ps.stdout.splitlines():
+                log(f" -  {line}")
+            services = stop_services()
+            if services:
+                log(f" - stopped services: {', '.join(services)}")
+            n = kill_processes()
+            log(f" - killed {n} processes")
+            still_running = survivors()
+            if still_running:
+                log(f"WARNING: survivors after kill: {', '.join(f'{pid}({cmd})' for pid, cmd in still_running)}")
+            else:
+                log("verified: no survivors")
+            log("--- exit ---")
+            log("===================================================")
+            sys.exit(0)
+
         active_reasons = []
 
         if Path("/tmp/sprite-idle-killer-skip").exists():

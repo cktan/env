@@ -316,4 +316,6 @@ LOG: /tmp/sprite-idle-killer.log""")
     killed = kill_existing_instances()
     if killed:
         log(f"killed previous instance(s): {killed}")
+
+    time.sleep(30)
     main_loop()

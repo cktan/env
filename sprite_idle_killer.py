@@ -22,6 +22,8 @@ Step by step, what happens when this script is executed:
         - a skip file exists at /tmp/sprite-idle-killer-skip
         - any of the 1m/5m/15m load averages exceeds LOAD_THRESHOLD
         - a bash process was started less than BASH_RECENT_SECS (30m) ago
+        - a pty under /dev/pts was written to less than BASH_RECENT_SECS
+          (30m) ago (catches keystrokes in an existing long-running shell)
    If none of those apply, the system is idle: log a `ps -ef` snapshot,
    stop all running systemd services, SIGTERM/SIGKILL every remaining
    process, confirm nothing survived, and exit(0) (all via `shutdown()`).
@@ -38,7 +40,7 @@ from pathlib import Path
 
 LOG_PATH = "/tmp/sprite-idle-killer.log"
 LOG_MAX_LINES = 500
-LOAD_THRESHOLD = 0.03   # all three load averages must be <= this to be idle
+LOAD_THRESHOLD = 0.03   # all three load averages must be < this to be idle
 SLEEP_INTERVAL = 300   # seconds between idle checks
 SIGTERM_WAIT = 5
 BASH_RECENT_SECS = 1800
@@ -179,6 +181,33 @@ def recent_bash_process():
     return youngest
 
 
+def recent_tty_activity():
+    """Return (path, age_secs) of the most recently written /dev/pts device within BASH_RECENT_SECS, or None.
+
+    A pty's mtime updates on every write to it, which includes echoed
+    keystrokes — so this catches typing in an existing shell, unlike
+    recent_bash_process() which only sees newly started shells.
+    """
+    now = time.time()
+    youngest = None
+    pts_dir = Path("/dev/pts")
+    if not pts_dir.is_dir():
+        return None
+    for entry in pts_dir.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except (FileNotFoundError, PermissionError):
+            continue
+        age = now - mtime
+        if age < BASH_RECENT_SECS:
+            vlog(f"tty {entry} age {age:.0f}s — recent")
+            if youngest is None or age < youngest[1]:
+                youngest = (str(entry), age)
+    return youngest
+
+
 def stop_services():
     """Stop all running systemd services; return list of service names stopped."""
     try:
@@ -293,6 +322,11 @@ def main_loop():
             log(f"bash started recently — not idle; sleep")
             continue
 
+        tty = recent_tty_activity()
+        if tty:
+            log(f"tty activity recently — not idle; sleep")
+            continue
+
         avg1, avg5, avg15 = load_avgs()
         log(f"load averages: {avg1:.2f} {avg5:.2f} {avg15:.2f}")
         if any(v > LOAD_THRESHOLD for v in (avg1, avg5, avg15)):
@@ -316,6 +350,7 @@ IDLE when ALL of the following are true:
   - No skip file at /tmp/sprite-idle-killer-skip
   - All three load averages (1m, 5m, 15m) <= 0.03
   - No bash process started less than 30 minutes ago
+  - No /dev/pts device written to less than 30 minutes ago
 
 If not idle: wait for next check cycle.
 If idle: stop services, kill all PIDs >= 10 (except self), verify, exit 0.

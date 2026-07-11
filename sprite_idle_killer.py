@@ -14,7 +14,7 @@ Step by step, what happens when this script is executed:
    cmdline mentions this script's filename and kill it (SIGTERM, then
    SIGKILL after a grace period). This guarantees only one watchdog runs
    at a time, even if the script gets started twice.
-3. Sleep 30s to let the system settle right after startup before the first
+3. Sleep 60s to let the system settle right after startup before the first
    idle check.
 4. Enter `main_loop()`, which repeats forever: check idleness. The machine
    is considered NOT idle (and the loop just sleeps and retries) if any of
@@ -214,7 +214,7 @@ def shutdown(reason):
     """Log a ps -ef snapshot, stop services, kill everything, verify, and exit(0).
 
     `reason` is logged first as the "going down" banner line explaining why
-    this call is happening (stuck bash vs. idle system).
+    this call is happening.
     """
 
     def kill_processes():
@@ -292,42 +292,30 @@ def shutdown(reason):
 
 
 def main_loop():
-    """Check idleness every SLEEP_INTERVAL seconds; kill everything and exit when idle."""
+    """Sleep and re-check idleness every SLEEP_INTERVAL seconds; shut down once idle."""
     log("--- start" + (" (-v)" if VERBOSE else "") + " ---")
     log("started in -v mode" if VERBOSE else "started")
     while True:
-        # Collect every reason the machine looks "active" this cycle. Any
-        # single reason is enough to skip the shutdown and sleep until the
-        # next check — active_reasons stays empty only when all checks
-        # agree the box is idle.
-        active_reasons = []
+        time.sleep(SLEEP_INTERVAL)
 
         if Path("/tmp/sprite-idle-killer-skip").exists():
-            log("skip file present — skipping idle check")
-            active_reasons.append("skip file present")
-
-        avg1, avg5, avg15 = load_avgs()
-        vlog(f"load averages: {avg1:.2f} {avg5:.2f} {avg15:.2f}")
-        for label, val in (("1m", avg1), ("5m", avg5), ("15m", avg15)):
-            if val > LOAD_THRESHOLD:
-                active_reasons.append(f"load({label}) {val:.2f} > {LOAD_THRESHOLD}")
-        if not any(v > LOAD_THRESHOLD for v in (avg1, avg5, avg15)):
-            log(f"idle check: load {avg1:.2f} {avg5:.2f} {avg15:.2f} all <= {LOAD_THRESHOLD}")
+            log("skip file present — not idle; skip")
+            continue
 
         bash = recent_bash_process()
         if bash:
-            pid, age = bash
-            active_reasons.append(f"bash pid {pid} started {age:.0f}s ago (< {BASH_RECENT_SECS}s)")
-        else:
-            log("idle check: no recent bash process")
-
-        if active_reasons:
-            log(f" - not idle: {'; '.join(active_reasons)}; sleep")
-            time.sleep(SLEEP_INTERVAL)
+            log(f"bash started recently — not idle; sleep")
             continue
 
-        # All checks passed: idle.
-        shutdown("system is idle")
+        avg1, avg5, avg15 = load_avgs()
+        log(f"load averages: {avg1:.2f} {avg5:.2f} {avg15:.2f}")
+        if any(v > LOAD_THRESHOLD for v in (avg1, avg5, avg15)):
+            log(f"load average above {LOAD_THRESHOLD} — not idle; sleep")
+            continue
+
+        break
+
+    shutdown("system is idle")
 
 
 if __name__ == "__main__":
@@ -338,7 +326,7 @@ Checks every 5 minutes. On startup, kills any previous instance.
 
 IDLE when ALL of the following are true:
   - No skip file at /tmp/sprite-idle-killer-skip
-  - All three load averages (1m, 5m, 15m) <= 0.05
+  - All three load averages (1m, 5m, 15m) <= 0.03
   - No bash process started less than 30 minutes ago
 
 If not idle: wait for next check cycle.
@@ -356,5 +344,5 @@ LOG: /tmp/sprite-idle-killer.log""")
         log(f"killed previous instance(s): {killed}")
 
     # Brief settle period after (re)start before the first idle check.
-    time.sleep(30)
+    time.sleep(60)
     main_loop()

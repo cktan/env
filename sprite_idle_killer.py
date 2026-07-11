@@ -51,7 +51,7 @@ def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     path = Path(LOG_PATH)
     with open(path, "a") as f:
-        f.write(f"{ts} {msg}\n")
+        f.write(f"[{os.getpid()}] {ts} {msg}\n")
     # Re-read and rewrite the whole file every call to cap it at LOG_MAX_LINES.
     # Simple and fine at this log volume (one line per 5-minute check).
     lines = path.read_text().splitlines(keepends=True)
@@ -293,8 +293,6 @@ def shutdown(reason):
 
 def main_loop():
     """Sleep and re-check idleness every SLEEP_INTERVAL seconds; shut down once idle."""
-    log("--- start" + (" (-v)" if VERBOSE else "") + " ---")
-    log("started in -v mode" if VERBOSE else "started")
     while True:
         time.sleep(SLEEP_INTERVAL)
 
@@ -315,10 +313,11 @@ def main_loop():
 
         break
 
-    shutdown("system is idle")
+    shutdown("IDLE IDLE IDLE")
 
 
 if __name__ == "__main__":
+    log("--- start ---")
     if "-h" in sys.argv or "--help" in sys.argv:
         print("""sprite_idle_killer.py — kills idle processes on this Sprite machine
 
@@ -337,12 +336,12 @@ LOG: /tmp/sprite-idle-killer.log""")
 
     if "-v" in sys.argv or "--verbose" in sys.argv:
         VERBOSE = True
-
+        
     # Ensure only one watchdog is active before doing anything else.
     killed = kill_existing_instances()
     if killed:
         log(f"killed previous instance(s): {killed}")
 
     # Brief settle period after (re)start before the first idle check.
-    time.sleep(60)
+    time.sleep(1)
     main_loop()

@@ -210,33 +210,28 @@ def is_tmux(pid):
         return False
 
 
-def shutdown(reason):
+def shutdown():
     """Log a ps -ef snapshot, stop services, kill everything, verify, and exit(0).
-
-    `reason` is logged first as the "going down" banner line explaining why
-    this call is happening.
     """
+
+    my_pid = os.getpid()
+
+    # PIDs < 10 are early-boot/kernel-critical processes (init, kthreads,
+    # etc.) that we never want to touch. tmux is excluded so the terminal
+    # multiplexer session itself survives the sweep — everything running
+    # inside it still gets killed, but the server process it's attached to
+    # does not.
+    def killable():
+        ret = [ int(e.name) for e in os.scandir("/proc") if e.name.isdigit() ]
+        ret = [ x for x in ret if x >= 10 and x != my_pid and not is_tmux(x) ]
+        return ret
 
     def kill_processes():
         """SIGTERM then SIGKILL all PIDs >= 10 except self and tmux; return count of initial targets."""
-        my_pid = os.getpid()
-
-        # PIDs < 10 are early-boot/kernel-critical processes (init, kthreads,
-        # etc.) that we never want to touch. tmux is excluded so the terminal
-        # multiplexer session itself survives the sweep — everything running
-        # inside it still gets killed, but the server process it's attached to
-        # does not.
-        def killable():
-            return [
-                int(e.name)
-                for e in os.scandir("/proc")
-                if e.name.isdigit() and int(e.name) >= 10 and int(e.name) != my_pid
-                and not is_tmux(int(e.name))
-            ]
-
         targets = killable()
         for pid in targets:
             try:
+                log(f" - kill {pid}")
                 os.kill(pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
@@ -248,6 +243,7 @@ def shutdown(reason):
         # any new children spawned in the meantime that are themselves tmux.
         for pid in killable():
             try:
+                log(f" - kill -9 {pid}")
                 os.kill(pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
@@ -255,24 +251,16 @@ def shutdown(reason):
 
     def survivors():
         """Return list of (pid, cmd) for all PIDs >= 10 still alive except self and tmux."""
-        my_pid = os.getpid()
         result = []
-        for e in os.scandir("/proc"):
-            if not e.name.isdigit():
-                continue
-            pid = int(e.name)
-            if pid < 10 or pid == my_pid:
-                continue
+        for pid in killable():
             try:
                 cmd = Path(f"/proc/{pid}/comm").read_text().strip()
             except (FileNotFoundError, PermissionError):
                 cmd = "?"
-            if cmd.startswith("tmux"):
-                continue
             result.append((pid, cmd))
         return result
 
-    log(f"{reason} — going down -----------------------")
+    log(f"-----------------— going down --------------------")
     ps = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
     for line in ps.stdout.splitlines():
         log(f" -  {line}")
@@ -312,8 +300,9 @@ def main_loop():
             continue
 
         break
-
-    shutdown("IDLE IDLE IDLE")
+    
+    log("--- IDLE IDLE IDLE IDLE IDLE IDLE IDLE IDLE IDLE IDLE IDLE IDLE IDLE IDLE ---")
+    shutdown()
 
 
 if __name__ == "__main__":

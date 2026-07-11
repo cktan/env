@@ -25,12 +25,13 @@ Step by step, what happens when this script is executed:
         - a pty under /dev/pts was written to less than BASH_RECENT_SECS
           (30m) ago (catches keystrokes in an existing long-running shell)
    If none of those apply, the system is idle: log a `ps -ef` snapshot,
-   stop all running systemd services, SIGTERM/SIGKILL every remaining
+   stop all running sprite-env services, SIGTERM/SIGKILL every remaining
    process, confirm nothing survived, and exit(0) (all via `shutdown()`).
 
 All decisions and actions are appended to LOG_PATH so the shutdown reason
 can be reconstructed after the fact.
 """
+import json
 import os
 import signal
 import subprocess
@@ -209,23 +210,21 @@ def recent_tty_activity():
 
 
 def stop_services():
-    """Stop all running systemd services; return list of service names stopped."""
+    """Stop all running sprite-env services; return list of service names stopped."""
     try:
-        # --no-legend/--no-pager give a plain "unit load active sub ..."
-        # table with no header/footer, so the first whitespace-separated
-        # column of each line is just the unit name.
         result = subprocess.run(
-            ["systemctl", "list-units", "--type=service", "--state=running",
-             "--no-legend", "--no-pager"],
+            ["sprite-env", "services", "list"],
             capture_output=True, text=True,
         )
-        services = [line.split()[0] for line in result.stdout.splitlines() if line.strip()]
+        services_data = json.loads(result.stdout)
+        services = [s["name"] for s in services_data
+                    if s.get("state", {}).get("status") == "running"]
         for svc in services:
-            subprocess.run(["systemctl", "stop", svc], capture_output=True, timeout=10)
+            subprocess.run(["sprite-env", "services", "stop", svc], capture_output=True, timeout=10)
         return services
     except Exception as e:
         # Broad catch is intentional: this runs during shutdown and must
-        # never abort the rest of the kill sequence just because systemctl
+        # never abort the rest of the kill sequence just because sprite-env
         # is missing/misbehaving.
         log(f"stop_services error: {e}")
         return []

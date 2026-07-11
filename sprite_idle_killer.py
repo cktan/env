@@ -2,10 +2,10 @@
 """sprite_idle_killer.py — watchdog that shuts down an idle Sprite VM.
 
 Runs forever in a loop, checking every SLEEP_INTERVAL seconds whether the
-machine looks idle. When it decides the machine is idle (or a bash shell has
-been open unreasonably long), it stops all services and kills every process
-on the box, then exits. It is meant to be started once (e.g. from a systemd
-unit or session bootstrap) and left running in the background.
+machine looks idle. When it decides the machine is idle, it stops all
+services and kills every process on the box, then exits. It is meant to be
+started once (e.g. from a systemd unit or session bootstrap) and left
+running in the background.
 
 Step by step, what happens when this script is executed:
 
@@ -16,19 +16,15 @@ Step by step, what happens when this script is executed:
    at a time, even if the script gets started twice.
 3. Sleep 30s to let the system settle right after startup before the first
    idle check.
-4. Enter `main_loop()`, which repeats forever:
-   a. `old_bash_process()` — if any bash process has been alive for
-      BASH_OLD_SECS (10h) or more, treat that as an unconditional
-      "shut down now" trigger, regardless of load or other activity.
-   b. Otherwise check idleness. The machine is considered NOT idle (and the
-      loop just sleeps and retries) if any of these hold:
+4. Enter `main_loop()`, which repeats forever: check idleness. The machine
+   is considered NOT idle (and the loop just sleeps and retries) if any of
+   these hold:
         - a skip file exists at /tmp/sprite-idle-killer-skip
         - any of the 1m/5m/15m load averages exceeds LOAD_THRESHOLD
         - a bash process was started less than BASH_RECENT_SECS (30m) ago
-   c. If none of those apply, the system is idle: log a `ps -ef` snapshot,
-      stop all running systemd services, SIGTERM/SIGKILL every remaining
-      process (`kill_processes()`), confirm nothing survived
-      (`survivors()`), and exit(0).
+   If none of those apply, the system is idle: log a `ps -ef` snapshot,
+   stop all running systemd services, SIGTERM/SIGKILL every remaining
+   process, confirm nothing survived, and exit(0) (all via `shutdown()`).
 
 All decisions and actions are appended to LOG_PATH so the shutdown reason
 can be reconstructed after the fact.
@@ -46,7 +42,6 @@ LOAD_THRESHOLD = 0.03   # all three load averages must be <= this to be idle
 SLEEP_INTERVAL = 300   # seconds between idle checks
 SIGTERM_WAIT = 5
 BASH_RECENT_SECS = 1800
-BASH_OLD_SECS = 36000  # 10 hours
 
 VERBOSE = False
 
@@ -71,7 +66,7 @@ def vlog(msg):
 
 
 def kill_existing_instances():
-    """Kill any other running process whose cmdline contains this script's filename."""
+    """Find and terminate other processes running this same script, so only one instance is active."""
     my_pid = os.getpid()
     script_name = Path(__file__).name
     killed = []
@@ -112,10 +107,16 @@ def load_avgs():
     return float(parts[0]), float(parts[1]), float(parts[2])
 
 
-def recent_bash_process():
-    """Return (pid, age_secs) of the most recently started bash within BASH_RECENT_SECS, or None."""
-    # SC_CLK_TCK converts the kernel's jiffy-based starttime (below) to seconds.
-    clk_tck = os.sysconf("SC_CLK_TCK")
+def pid_start_time(pid):
+    """Return pid's start time as epoch seconds, or None if the boot time can't be determined.
+
+    Combines the system boot time (/proc/stat's "btime") with the process's
+    starttime field (/proc/<pid>/stat), which the kernel records in clock
+    ticks since boot. Raises the same exceptions as reading those files
+    would (FileNotFoundError, PermissionError, ValueError, IndexError) if
+    pid has exited or its stat line can't be parsed — callers already
+    handle those around their own /proc reads.
+    """
     boot_time = None
     with open("/proc/stat") as f:
         for line in f:
@@ -127,6 +128,25 @@ def recent_bash_process():
     if boot_time is None:
         return None
 
+    stat = Path(f"/proc/{pid}/stat").read_text()
+    # /proc/<pid>/stat is "pid (comm) state field3 field4 ...". The
+    # comm can itself contain spaces/parens, so we can't just
+    # .split() the whole line — instead find the LAST ')' (comm is
+    # always the second, parenthesized token) and parse everything
+    # after it, where field positions are fixed.
+    after_comm = stat[stat.rfind(")") + 2:]
+    fields = after_comm.split()
+    # starttime is field 22 of the whole stat line; since we've
+    # already consumed pid, comm and state, it's index 19 here
+    # (22 - 3), measured in clock ticks since boot.
+    start_ticks = int(fields[19])  # field 22 overall = index 19 after state
+    # SC_CLK_TCK converts the kernel's jiffy-based starttime to seconds.
+    clk_tck = os.sysconf("SC_CLK_TCK")
+    return boot_time + start_ticks / clk_tck
+
+
+def recent_bash_process():
+    """Return (pid, age_secs) of the most recently started bash within BASH_RECENT_SECS, or None."""
     now = time.time()
     my_pid = os.getpid()
     youngest = None
@@ -141,19 +161,10 @@ def recent_bash_process():
             comm = Path(f"/proc/{pid}/comm").read_text().strip()
             if comm != "bash":
                 continue
-            stat = Path(f"/proc/{pid}/stat").read_text()
-            # /proc/<pid>/stat is "pid (comm) state field3 field4 ...". The
-            # comm can itself contain spaces/parens, so we can't just
-            # .split() the whole line — instead find the LAST ')' (comm is
-            # always the second, parenthesized token) and parse everything
-            # after it, where field positions are fixed.
-            after_comm = stat[stat.rfind(")") + 2:]
-            fields = after_comm.split()
-            # starttime is field 22 of the whole stat line; since we've
-            # already consumed pid, comm and state, it's index 19 here
-            # (22 - 3), measured in clock ticks since boot.
-            start_ticks = int(fields[19])  # field 22 overall = index 19 after state
-            age = now - (boot_time + start_ticks / clk_tck)
+            start_time = pid_start_time(pid)
+            if start_time is None:
+                continue
+            age = now - start_time
             if age < BASH_RECENT_SECS:
                 vlog(f"bash pid {pid} age {age:.0f}s — recent")
                 if youngest is None or age < youngest[1]:
@@ -166,59 +177,6 @@ def recent_bash_process():
             pass
 
     return youngest
-
-
-def old_bash_process():
-    """Return (pid, age_secs) of any bash process older than BASH_OLD_SECS, or None.
-
-    Mirrors recent_bash_process()'s /proc/stat parsing, but checks the
-    opposite direction (age >= threshold) and returns on the first match
-    since any single long-lived bash is enough to trigger a forced shutdown.
-    """
-    clk_tck = os.sysconf("SC_CLK_TCK")
-    boot_time = None
-    with open("/proc/stat") as f:
-        for line in f:
-            if line.startswith("btime"):
-                boot_time = int(line.split()[1])
-                break
-    if boot_time is None:
-        return None
-
-    now = time.time()
-    my_pid = os.getpid()
-
-    for entry in os.scandir("/proc"):
-        if not entry.name.isdigit():
-            continue
-        pid = int(entry.name)
-        if pid == my_pid:
-            continue
-        try:
-            comm = Path(f"/proc/{pid}/comm").read_text().strip()
-            if comm != "bash":
-                continue
-            stat = Path(f"/proc/{pid}/stat").read_text()
-            # /proc/<pid>/stat is "pid (comm) state field3 field4 ...". The
-            # comm can itself contain spaces/parens, so we can't just
-            # .split() the whole line — instead find the LAST ')' (comm is
-            # always the second, parenthesized token) and parse everything
-            # after it, where field positions are fixed.
-            after_comm = stat[stat.rfind(")") + 2:]
-            fields = after_comm.split()
-            # starttime is field 22 of the whole stat line; since we've
-            # already consumed pid, comm and state, it's index 19 here
-            # (22 - 3), measured in clock ticks since boot.
-            start_ticks = int(fields[19])
-            age = now - (boot_time + start_ticks / clk_tck)
-            if age >= BASH_OLD_SECS:
-                return (pid, age)
-        except (FileNotFoundError, PermissionError, ValueError, IndexError):
-            # Process exited mid-scan, or /proc fields were in an
-            # unexpected shape — just skip that pid.
-            pass
-
-    return None
 
 
 def stop_services():
@@ -252,61 +210,85 @@ def is_tmux(pid):
         return False
 
 
-def kill_processes():
-    """SIGTERM then SIGKILL all PIDs >= 10 except self and tmux; return count of initial targets."""
-    my_pid = os.getpid()
+def shutdown(reason):
+    """Log a ps -ef snapshot, stop services, kill everything, verify, and exit(0).
 
-    # PIDs < 10 are early-boot/kernel-critical processes (init, kthreads,
-    # etc.) that we never want to touch. tmux is excluded so the terminal
-    # multiplexer session itself survives the sweep — everything running
-    # inside it still gets killed, but the server process it's attached to
-    # does not.
-    def killable():
-        return [
-            int(e.name)
-            for e in os.scandir("/proc")
-            if e.name.isdigit() and int(e.name) >= 10 and int(e.name) != my_pid
-            and not is_tmux(int(e.name))
-        ]
+    `reason` is logged first as the "going down" banner line explaining why
+    this call is happening (stuck bash vs. idle system).
+    """
 
-    targets = killable()
-    for pid in targets:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-    # Grace period for processes to exit cleanly on SIGTERM before being
-    # force-killed.
-    time.sleep(SIGTERM_WAIT)
-    # Re-scan rather than reusing `targets`: some processes may have exited
-    # on their own during the wait, and killable() also naturally excludes
-    # any new children spawned in the meantime that are themselves tmux.
-    for pid in killable():
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-    return len(targets)
+    def kill_processes():
+        """SIGTERM then SIGKILL all PIDs >= 10 except self and tmux; return count of initial targets."""
+        my_pid = os.getpid()
 
+        # PIDs < 10 are early-boot/kernel-critical processes (init, kthreads,
+        # etc.) that we never want to touch. tmux is excluded so the terminal
+        # multiplexer session itself survives the sweep — everything running
+        # inside it still gets killed, but the server process it's attached to
+        # does not.
+        def killable():
+            return [
+                int(e.name)
+                for e in os.scandir("/proc")
+                if e.name.isdigit() and int(e.name) >= 10 and int(e.name) != my_pid
+                and not is_tmux(int(e.name))
+            ]
 
-def survivors():
-    """Return list of (pid, cmd) for all PIDs >= 10 still alive except self and tmux."""
-    my_pid = os.getpid()
-    result = []
-    for e in os.scandir("/proc"):
-        if not e.name.isdigit():
-            continue
-        pid = int(e.name)
-        if pid < 10 or pid == my_pid:
-            continue
-        try:
-            cmd = Path(f"/proc/{pid}/comm").read_text().strip()
-        except (FileNotFoundError, PermissionError):
-            cmd = "?"
-        if cmd.startswith("tmux"):
-            continue
-        result.append((pid, cmd))
-    return result
+        targets = killable()
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+        # Grace period for processes to exit cleanly on SIGTERM before being
+        # force-killed.
+        time.sleep(SIGTERM_WAIT)
+        # Re-scan rather than reusing `targets`: some processes may have exited
+        # on their own during the wait, and killable() also naturally excludes
+        # any new children spawned in the meantime that are themselves tmux.
+        for pid in killable():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        return len(targets)
+
+    def survivors():
+        """Return list of (pid, cmd) for all PIDs >= 10 still alive except self and tmux."""
+        my_pid = os.getpid()
+        result = []
+        for e in os.scandir("/proc"):
+            if not e.name.isdigit():
+                continue
+            pid = int(e.name)
+            if pid < 10 or pid == my_pid:
+                continue
+            try:
+                cmd = Path(f"/proc/{pid}/comm").read_text().strip()
+            except (FileNotFoundError, PermissionError):
+                cmd = "?"
+            if cmd.startswith("tmux"):
+                continue
+            result.append((pid, cmd))
+        return result
+
+    log(f"{reason} — going down -----------------------")
+    ps = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
+    for line in ps.stdout.splitlines():
+        log(f" -  {line}")
+    services = stop_services()
+    if services:
+        log(f" - stopped services: {', '.join(services)}")
+    n = kill_processes()
+    log(f" - killed {n} processes")
+    still_running = survivors()
+    if still_running:
+        log(f"WARNING: survivors after kill: {', '.join(f'{pid}({cmd})' for pid, cmd in still_running)}")
+    else:
+        log("verified: no survivors")
+    log("--- exit ---")
+    log("===================================================")
+    sys.exit(0)
 
 
 def main_loop():
@@ -314,30 +296,6 @@ def main_loop():
     log("--- start" + (" (-v)" if VERBOSE else "") + " ---")
     log("started in -v mode" if VERBOSE else "started")
     while True:
-        # A bash open for BASH_OLD_SECS is treated as a stuck/forgotten
-        # session and forces a shutdown immediately, bypassing the
-        # load-average / recent-bash idle checks below entirely.
-        old_bash = old_bash_process()
-        if old_bash:
-            pid, age = old_bash
-            log(f"bash pid {pid} has been running {age/3600:.1f}h (>= {BASH_OLD_SECS/3600:.0f}h) — going down -----------------------")
-            ps = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
-            for line in ps.stdout.splitlines():
-                log(f" -  {line}")
-            services = stop_services()
-            if services:
-                log(f" - stopped services: {', '.join(services)}")
-            n = kill_processes()
-            log(f" - killed {n} processes")
-            still_running = survivors()
-            if still_running:
-                log(f"WARNING: survivors after kill: {', '.join(f'{pid}({cmd})' for pid, cmd in still_running)}")
-            else:
-                log("verified: no survivors")
-            log("--- exit ---")
-            log("===================================================")
-            sys.exit(0)
-
         # Collect every reason the machine looks "active" this cycle. Any
         # single reason is enough to skip the shutdown and sleep until the
         # next check — active_reasons stays empty only when all checks
@@ -348,13 +306,13 @@ def main_loop():
             log("skip file present — skipping idle check")
             active_reasons.append("skip file present")
 
-        l1, l5, l15 = load_avgs()
-        vlog(f"load averages: {l1:.2f} {l5:.2f} {l15:.2f}")
-        for label, val in (("1m", l1), ("5m", l5), ("15m", l15)):
+        avg1, avg5, avg15 = load_avgs()
+        vlog(f"load averages: {avg1:.2f} {avg5:.2f} {avg15:.2f}")
+        for label, val in (("1m", avg1), ("5m", avg5), ("15m", avg15)):
             if val > LOAD_THRESHOLD:
                 active_reasons.append(f"load({label}) {val:.2f} > {LOAD_THRESHOLD}")
-        if not any(v > LOAD_THRESHOLD for v in (l1, l5, l15)):
-            log(f"idle check: load {l1:.2f} {l5:.2f} {l15:.2f} all <= {LOAD_THRESHOLD}")
+        if not any(v > LOAD_THRESHOLD for v in (avg1, avg5, avg15)):
+            log(f"idle check: load {avg1:.2f} {avg5:.2f} {avg15:.2f} all <= {LOAD_THRESHOLD}")
 
         bash = recent_bash_process()
         if bash:
@@ -368,25 +326,8 @@ def main_loop():
             time.sleep(SLEEP_INTERVAL)
             continue
 
-        # All checks passed: idle. Snapshot the process table for the log
-        # before tearing everything down, since this info is gone once we exit.
-        log("system is idle — going down -----------------------")
-        ps = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
-        for line in ps.stdout.splitlines():
-            log(f" -  {line}")
-        services = stop_services()
-        if services:
-            log(f" - stopped services: {', '.join(services)}")
-        n = kill_processes()
-        log(f" - killed {n} processes")
-        still_running = survivors()
-        if still_running:
-            log(f"WARNING: survivors after kill: {', '.join(f'{pid}({cmd})' for pid, cmd in still_running)}")
-        else:
-            log("verified: no survivors")
-        log("--- exit ---")
-        log("===================================================")
-        sys.exit(0)
+        # All checks passed: idle.
+        shutdown("system is idle")
 
 
 if __name__ == "__main__":

@@ -275,6 +275,7 @@ def shutdown():
                 os.kill(pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+        time.sleep(SIGTERM_WAIT)
         return len(targets)
 
     def survivors():

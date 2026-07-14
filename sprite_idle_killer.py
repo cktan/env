@@ -311,7 +311,12 @@ def shutdown():
 def main_loop():
     """Sleep and re-check idleness every SLEEP_INTERVAL seconds; shut down once idle."""
     while True:
+        before = time.time()
         time.sleep(SLEEP_INTERVAL)
+        after = time.time()
+        if after - before > 2 * SLEEP_INTERVAL:
+            log(f"woke from hibernation (slept {after - before:.0f}s, expected {SLEEP_INTERVAL}s); exit")
+            sys.exit(0)
 
         if Path("/tmp/sprite-idle-killer-skip").exists():
             log("skip file present — not idle; skip")

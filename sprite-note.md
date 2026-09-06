@@ -1,7 +1,7 @@
 # Note on setting up a new sprite VM
 
 . gh auth login
-. gh repo clone env
+. gh repo clone cktan/env
 . cd env
 . bash sprite-init.sh
 

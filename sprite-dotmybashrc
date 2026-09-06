@@ -36,5 +36,8 @@ xterm*|rxvt*)
     ;;
 esac
 
-nohup ./sprite_idle_killer.py 2>&1 > /tmp/sprite_idle_killer.log &
+if [[ "${BASH_SOURCE[1]}" == *".profile" ]]; then
+    nohup ./sprite_idle_killer.py 2>&1 > /tmp/sprite_idle_killer.log &
+fi
+
 

@@ -5,7 +5,7 @@ alias m='make -j8'
 alias ls='ls -F'
 alias rm~='rm *~'
 alias f='find . -name '
-alias python='python3'
+#alias python='python3'
 alias pspg='ps -ef | grep postgres'
 alias r='(cd ~/p/pg/ext && m && cd ~/p/pg && m install && cd run && bash restart.sh)'
 alias j='jobs'
@@ -35,3 +35,6 @@ xterm*|rxvt*)
 *)
     ;;
 esac
+
+nohup ./sprite_idle_killer.py 2>&1 > /tmp/sprite_idle_killer.log &
+
